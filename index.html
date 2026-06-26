@@ -195,6 +195,65 @@
 
 .htg-footer-note{ font-size:10.5px; color:var(--muted); text-align:center; padding: 2px 8px 0; }
 .htg-reset{ background:none; border:none; color:var(--muted); text-decoration:underline; cursor:pointer; font-size:10.5px; font-family:inherit; }
+
+.htg-warning{
+  display:flex;
+  flex-direction:column;
+  gap:5px;
+  background: linear-gradient(180deg, var(--burgundy), #5e1c28);
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 12px;
+  padding: 12px 16px;
+}
+.htg-warning-text{ font-weight:700; font-size:13px; color:#fff; }
+.htg-warning-meta{ display:flex; justify-content:space-between; font-size:11.5px; color:rgba(255,255,255,0.85); }
+
+.htg-powerup-btn{
+  border:none;
+  border-radius:12px;
+  padding:13px;
+  font-family:'Inter', sans-serif;
+  font-weight:700;
+  font-size:13px;
+  cursor:pointer;
+  background: linear-gradient(180deg, var(--gold-soft), var(--gold));
+  color: var(--navy);
+  animation: htgPulse 1.8s ease-in-out infinite;
+}
+
+.htg-adoverlay{
+  display:none;
+  position:fixed;
+  inset:0;
+  background: rgba(0,0,0,0.78);
+  z-index:100;
+  align-items:center;
+  justify-content:center;
+  padding:20px;
+}
+.htg-adbox{
+  background: linear-gradient(180deg, var(--navy-card), var(--navy-light));
+  border:1px solid var(--gold);
+  border-radius:16px;
+  padding:30px 24px;
+  max-width:340px;
+  width:100%;
+  text-align:center;
+}
+.htg-adlabel{ font-family:'Playfair Display', serif; font-size:18px; color:var(--gold-soft); margin-bottom:10px; }
+.htg-adbody{ font-size:13px; color:var(--cream); margin-bottom:18px; line-height:1.4; }
+.htg-adtimer{ font-size:34px; font-weight:800; color:var(--gold); margin-bottom:18px; }
+.htg-adclose{
+  border:none;
+  border-radius:10px;
+  padding:11px 26px;
+  font-weight:700;
+  font-family:'Inter', sans-serif;
+  background: var(--gold);
+  color: var(--navy);
+  cursor:pointer;
+}
+.htg-adclose:disabled{ filter:grayscale(0.6) brightness(0.6); cursor:not-allowed; }
 </style>
 
 <div class="htg-app">
@@ -203,6 +262,14 @@
     <div class="htg-stats">
       <div class="htg-money" id="htg-money">0 €</div>
       <div class="htg-income" id="htg-income">+0 €/s</div>
+    </div>
+  </div>
+
+  <div class="htg-warning" id="htg-warning" style="display:none;">
+    <div class="htg-warning-text">⚠️ Auto-clicker détecté — clique manuellement !</div>
+    <div class="htg-warning-meta">
+      <span id="htg-warning-time">10s</span>
+      <span id="htg-warning-count">Avertissement 1/15</span>
     </div>
   </div>
 
@@ -229,6 +296,8 @@
     </div>
   </div>
 
+  <button class="htg-powerup-btn" id="htg-powerup-btn" style="display:none;">🎁 Auto-clic gratuit (1 min) — regarder une pub</button>
+
   <div>
     <div class="htg-list-title">L'hôtel — étages</div>
     <div class="htg-building" id="htg-building"></div>
@@ -240,6 +309,15 @@
 </div>
 
 <div class="htg-toasts" id="htg-toasts"></div>
+
+<div class="htg-adoverlay" id="htg-adoverlay" style="display:none;">
+  <div class="htg-adbox">
+    <div class="htg-adlabel">📺 Publicité</div>
+    <div class="htg-adbody">Regarde cette pub pour débloquer ton auto-clic gratuit d'une minute.</div>
+    <div class="htg-adtimer" id="htg-adtimer">5</div>
+    <button class="htg-adclose" id="htg-adclose" disabled>Fermer</button>
+  </div>
+</div>
 
 <script>
 (function(){
@@ -266,14 +344,34 @@
   const OFFLINE_CAP_HOURS = 8;
   const SAVE_KEY = "hotel-tycoon-save";
 
+  // ---- Anti auto-clicker ----
+  const AUTOCLICK_WINDOW = 8;          // nb de clics consécutifs analysés
+  const AUTOCLICK_MAX_INTERVAL = 180;  // ms - en dessous = suspect
+  const AUTOCLICK_MIN_INTERVAL = 10;   // ms - en dessous = double-event anormal, ignoré
+  const WARNING_DURATION = 10;         // secondes d'affichage du message
+  const MAX_WARNINGS = 15;             // avertissements avant reset
+
+  // ---- Auto-clic "officiel" du jeu ----
+  const POWERUP_INTERVAL_MS = 10 * 60 * 1000;   // apparaît toutes les 10 min
+  const POWERUP_AUTOCLICK_DURATION_MS = 60 * 1000; // dure 1 minute
+  const POWERUP_AUTOCLICK_RATE_MS = 1000;       // 1 clic / seconde
+  const AD_DURATION_SEC = 5;                    // durée de la fausse pub
+
   let state = {
     money: 20,
     activeFloor: 0,
     globalMult: 1,
     floors: FLOORS.map((f, i) => ({ unlocked: i === 0, employees: 0, completed: false })),
+    warningCount: 0,
+    nextPowerupTime: Date.now() + POWERUP_INTERVAL_MS,
   };
 
   let storageAvailable = true;
+  let clickTimestamps = [];
+  let warningActive = false;
+  let warningInterval = null;
+  let officialAutoClickActive = false;
+  let officialAutoClickTimer = null;
 
   // ---------------- Helpers ----------------
   function formatMoney(n){
@@ -298,7 +396,7 @@
     const f = FLOORS[floorIdx];
     const fs = state.floors[floorIdx];
     if(!fs.unlocked) return 0;
-    return f.baseIncome * fs.employees * (1 + fs.employees * 0.05);
+    return f.baseIncome * fs.employees * (1 + fs.employees * 0.1);
   }
 
   function totalIncomePerSecond(){
@@ -318,6 +416,7 @@
     const f = FLOORS[i];
     const fs = state.floors[i];
     if(!fs.unlocked) return;
+    if(!officialAutoClickActive) recordHumanClick();
     const gain = f.click * state.globalMult;
     state.money += gain;
     spawnFloatText("+" + formatMoney(gain));
@@ -344,32 +443,14 @@
       return;
     }
     if(i === nextLockedIndex()){
-      tryUnlock(i);
+      const prev = FLOORS[i-1];
+      const prevIncome = floorIncome(i-1);
+      showToast("🔒 Termine " + prev.name + " (" + formatMoney(prevIncome) + "/" + formatMoney(prev.goal) + " €/s) pour ouvrir cet étage");
     } else {
       showToast("🔒 Débloque d'abord les étages précédents");
     }
   }
 
-  function tryUnlock(i){
-    const f = FLOORS[i];
-
-    if(state.floors[i].unlocked) return;
-
-    if(state.money < f.unlockCost){
-        showToast("💰 Il manque " + formatMoney(f.unlockCost - state.money));
-        return;
-    }
-
-    // Achat de l'étage
-    state.money -= f.unlockCost;
-    state.floors[i].unlocked = true;
-    state.activeFloor = i;
-
-    render();
-    saveGame();
-
-    showToast("🏗️ " + f.name + " débloqué !");
-}
   function checkCompletions(){
     for(let i=0;i<FLOORS.length;i++){
       const f = FLOORS[i];
@@ -378,8 +459,133 @@
         fs.completed = true;
         state.globalMult *= COMPLETION_BONUS;
         showToast("✅ " + f.name + " terminé ! Revenus globaux +10%");
+        const next = FLOORS[i+1];
+        if(next && !state.floors[i+1].unlocked){
+          state.floors[i+1].unlocked = true;
+          state.activeFloor = i+1;
+          showToast("🏗️ " + next.name + " est maintenant ouvert !");
+        }
       }
     }
+  }
+
+  // ---------------- Détection d'auto-clicker ----------------
+  // Heuristique simple : un humain ne maintient pas un intervalle ultra-régulier
+  // et ultra-rapide entre ses clics sur de longues séries. Ce n'est pas infaillible
+  // (un auto-clicker qui randomise ses intervalles peut passer en dessous du radar),
+  // mais ça attrape les outils basiques par défaut.
+  function recordHumanClick(){
+    const now = Date.now();
+    clickTimestamps.push(now);
+    if(clickTimestamps.length > AUTOCLICK_WINDOW) clickTimestamps.shift();
+    if(warningActive) return; // un avertissement est déjà affiché, on ne ré-analyse pas
+
+    if(clickTimestamps.length === AUTOCLICK_WINDOW){
+      let suspicious = true;
+      for(let k=1;k<clickTimestamps.length;k++){
+        const interval = clickTimestamps[k] - clickTimestamps[k-1];
+        if(interval > AUTOCLICK_MAX_INTERVAL || interval < AUTOCLICK_MIN_INTERVAL){
+          suspicious = false;
+          break;
+        }
+      }
+      if(suspicious){
+        triggerWarning();
+        clickTimestamps = [];
+      }
+    }
+  }
+
+  function triggerWarning(){
+    state.warningCount += 1;
+    warningActive = true;
+    let secondsLeft = WARNING_DURATION;
+
+    const banner = document.getElementById("htg-warning");
+    const timeEl = document.getElementById("htg-warning-time");
+    const countEl = document.getElementById("htg-warning-count");
+    banner.style.display = "flex";
+    timeEl.textContent = secondsLeft + "s";
+    countEl.textContent = "Avertissement " + state.warningCount + "/" + MAX_WARNINGS;
+
+    if(warningInterval) clearInterval(warningInterval);
+    warningInterval = setInterval(() => {
+      secondsLeft -= 1;
+      timeEl.textContent = Math.max(secondsLeft, 0) + "s";
+      if(secondsLeft <= 0){
+        clearInterval(warningInterval);
+        banner.style.display = "none";
+        warningActive = false;
+        if(state.warningCount >= MAX_WARNINGS){
+          performAutoclickReset();
+        }
+      }
+    }, 1000);
+  }
+
+  function performAutoclickReset(){
+    resetGame();
+    showToast("🚫 Progression réinitialisée : trop d'utilisation d'auto-clicker");
+  }
+
+  // ---------------- Auto-clic "officiel" (récompense pub) ----------------
+  function checkPowerupAvailability(){
+    if(officialAutoClickActive) return;
+    const btn = document.getElementById("htg-powerup-btn");
+    if(Date.now() >= state.nextPowerupTime){
+      btn.style.display = "block";
+    }
+  }
+
+  function onPowerupClick(){
+    document.getElementById("htg-powerup-btn").style.display = "none";
+    showFakeAd(() => {
+      activateOfficialAutoClick();
+      state.nextPowerupTime = Date.now() + POWERUP_INTERVAL_MS;
+      saveGame();
+    });
+  }
+
+  // Pub simulée. Pour une vraie pub, remplace le contenu de cette fonction par
+  // l'appel au SDK du réseau publicitaire (ex. AdMob côté mobile) et appelle
+  // onComplete() dans son callback "reward received".
+  function showFakeAd(onComplete){
+    const overlay = document.getElementById("htg-adoverlay");
+    const timerEl = document.getElementById("htg-adtimer");
+    const closeBtn = document.getElementById("htg-adclose");
+    overlay.style.display = "flex";
+    closeBtn.disabled = true;
+    let t = AD_DURATION_SEC;
+    timerEl.textContent = t;
+
+    const interval = setInterval(() => {
+      t -= 1;
+      timerEl.textContent = t > 0 ? t : "✓";
+      if(t <= 0){
+        clearInterval(interval);
+        closeBtn.disabled = false;
+      }
+    }, 1000);
+
+    closeBtn.onclick = () => {
+      overlay.style.display = "none";
+      onComplete();
+    };
+  }
+
+  function activateOfficialAutoClick(){
+    officialAutoClickActive = true;
+    showToast("🤖 Auto-clic du jeu activé pendant 1 minute !");
+    let elapsed = 0;
+    officialAutoClickTimer = setInterval(() => {
+      clickActiveFloor();
+      elapsed += POWERUP_AUTOCLICK_RATE_MS;
+      if(elapsed >= POWERUP_AUTOCLICK_DURATION_MS){
+        clearInterval(officialAutoClickTimer);
+        officialAutoClickActive = false;
+        showToast("✅ Auto-clic du jeu terminé");
+      }
+    }, POWERUP_AUTOCLICK_RATE_MS);
   }
 
   // ---------------- Rendering ----------------
@@ -470,7 +676,8 @@
         right.innerHTML = '<span class="htg-check">✓</span>';
       } else if(!fs.unlocked && i === nextIdx){
         right.classList.add("unlock-cost");
-        right.textContent = formatMoney(f.unlockCost);
+        const prevIncome = floorIncome(i-1);
+        right.textContent = formatMoney(prevIncome) + "/" + formatMoney(FLOORS[i-1].goal);
       } else if(!fs.unlocked){
         right.textContent = "—";
       }
@@ -503,6 +710,8 @@
         state.activeFloor = saved.activeFloor;
         state.globalMult = saved.globalMult;
         state.floors = saved.floors;
+        state.warningCount = saved.warningCount || 0;
+        state.nextPowerupTime = saved.nextPowerupTime || (Date.now() + POWERUP_INTERVAL_MS);
 
         const elapsedMs = Date.now() - (saved.lastSave || Date.now());
         const elapsedSec = Math.min(elapsedMs / 1000, OFFLINE_CAP_HOURS * 3600);
@@ -525,7 +734,14 @@
       activeFloor: 0,
       globalMult: 1,
       floors: FLOORS.map((f, i) => ({ unlocked: i === 0, employees: 0, completed: false })),
+      warningCount: 0,
+      nextPowerupTime: Date.now() + POWERUP_INTERVAL_MS,
     };
+    clickTimestamps = [];
+    warningActive = false;
+    if(warningInterval) clearInterval(warningInterval);
+    document.getElementById("htg-warning").style.display = "none";
+    document.getElementById("htg-powerup-btn").style.display = "none";
     try{ await window.storage.delete(SAVE_KEY); }catch(e){}
     render();
   }
@@ -545,6 +761,7 @@
   // ---------------- Init ----------------
   document.getElementById("htg-btn-click").addEventListener("click", clickActiveFloor);
   document.getElementById("htg-btn-hire").addEventListener("click", hireForActiveFloor);
+  document.getElementById("htg-powerup-btn").addEventListener("click", onPowerupClick);
   document.getElementById("htg-reset").addEventListener("click", () => {
     if(confirm("Réinitialiser toute la partie ?")) resetGame();
   });
@@ -553,6 +770,8 @@
     render();
     requestAnimationFrame(tick);
     setInterval(saveGame, 5000);
+    setInterval(checkPowerupAvailability, 1000);
+    checkPowerupAvailability();
   });
 
 })();
