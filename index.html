@@ -144,6 +144,17 @@
 .htg-floor-row:hover{ border-color: rgba(212,175,55,0.4); }
 .htg-floor-row.active{ border-color: var(--gold); background: linear-gradient(90deg, rgba(212,175,55,0.12), transparent); }
 .htg-floor-row.locked{ opacity:0.55; cursor: default; }
+.htg-floor-row.buyable{
+  opacity:1;
+  cursor:pointer;
+  border-color: var(--gold);
+  border-style: dashed;
+  animation: htgPulse 1.8s ease-in-out infinite;
+}
+@keyframes htgPulse{
+  0%,100%{ box-shadow: 0 0 0 0 rgba(212,175,55,0.25); }
+  50%{ box-shadow: 0 0 0 4px rgba(212,175,55,0.12); }
+}
 .htg-floor-row.completed{ border-color: rgba(63,143,111,0.6); }
 .htg-row-emoji{ font-size:20px; width:26px; text-align:center; }
 .htg-row-mid{ flex:1; min-width:0; }
@@ -320,22 +331,25 @@
     const cost = employeeCost(i);
     if(state.money >= cost){
       state.money -= cost;
-      fs.employees += Math.ceil(fs.employees * 0.1) + 1;
+      fs.employees += 1;
       render();
     }
   }
 
   function selectFloor(i){
-    console.log("Clic sur l'étage", i);
-
-    if(state.floors[i].unlocked){
-        state.activeFloor = i;
-        render();
-        return;
+    const fs = state.floors[i];
+    if(fs.unlocked){
+      state.activeFloor = i;
+      render();
+      return;
     }
+    if(i === nextLockedIndex()){
+      tryUnlock(i);
+    } else {
+      showToast("🔒 Débloque d'abord les étages précédents");
+    }
+  }
 
-    tryUnlock(i);
-}
   function tryUnlock(i){
     const f = FLOORS[i];
     if(state.floors[i].unlocked) return;
@@ -345,6 +359,9 @@
       state.activeFloor = i;
       showToast("🏗️ " + f.name + " vient d'ouvrir !");
       render();
+    } else {
+      const missing = f.unlockCost - state.money;
+      showToast("💰 Il manque " + formatMoney(missing) + " pour ouvrir " + f.name);
     }
   }
 
@@ -421,7 +438,7 @@
       const fs = state.floors[i];
       const row = document.createElement("div");
       row.className = "htg-floor-row" +
-        (fs.unlocked ? "" : " locked") +
+        (fs.unlocked ? "" : (i === nextIdx ? " buyable" : " locked")) +
         (i === state.activeFloor && fs.unlocked ? " active" : "") +
         (fs.completed ? " completed" : "");
 
