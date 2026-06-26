@@ -352,19 +352,24 @@
 
   function tryUnlock(i){
     const f = FLOORS[i];
-    if(state.floors[i].unlocked) return;
-    if(state.money >= f.unlockCost){
-      state.money -= f.unlockCost;
-      state.floors[i].unlocked = true;
-      state.activeFloor = i;
-      showToast("🏗️ " + f.name + " vient d'ouvrir !");
-      render();
-    } else {
-      const missing = f.unlockCost - state.money;
-      showToast("💰 Il manque " + formatMoney(missing) + " pour ouvrir " + f.name);
-    }
-  }
 
+    if(state.floors[i].unlocked) return;
+
+    if(state.money < f.unlockCost){
+        showToast("💰 Il manque " + formatMoney(f.unlockCost - state.money));
+        return;
+    }
+
+    // Achat de l'étage
+    state.money -= f.unlockCost;
+    state.floors[i].unlocked = true;
+    state.activeFloor = i;
+
+    render();
+    saveGame();
+
+    showToast("🏗️ " + f.name + " débloqué !");
+}
   function checkCompletions(){
     for(let i=0;i<FLOORS.length;i++){
       const f = FLOORS[i];
